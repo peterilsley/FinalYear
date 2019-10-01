@@ -5,37 +5,40 @@
 %
 %-------------------------------------
 
-function [x_,P_] = ekfTwo(fstate,init,N,stdM,dt)
+function [x_,P_] = ekfTwo(fstate,init,N,stdM,dt,A,x)
 %% Constants
-I=eye(N,'gpuArray');
+I=eye(N,'single','gpuArray');
 %% Variables specified
-x_=single(init)
+x_=init;
 t=0;
 q=0.1;
-P_= single(eye(N,'gpuArray')); 
+P_= eye(N,'single','gpuArray'); 
 
-P=eye(N,'gpuArray');
-Q=q^2*eye(N);%NOT USED RIGHT NOW
+P=eye(N,'single','gpuArray');
+%Q=q^2*eye(N);%NOT USED RIGHT NOW
 R=stdM^2;
-H=gpuArray([1 0 0]);%no unit transformation
+%H=gpuArray([1 0 0 ]);%no unit transformation
+H=ones(1,N,'single','gpuArray');
 %% Mazzoni
 e=0.04;
  B=0.8;
- prevA=zeros(N,'gpuArray');%create these on the GPU
- nowA=zeros(N,'gpuArray');
+ prevA=zeros(N);%,'gpuArray');%create these on the GPU
+ nowA=zeros(N);%,'gpuArray');
 %% Precalculations
-x=[];
-syms x [1 N] 
 
-    a=fstate(x,dt);
-    A=jacobian(a,x);%the transition matrix %assumes a linear dt
-x1='';
-x2='';
-x3='';%Need to find a way to not need these
+%syms(sym('x', [1 N]))=''
+
+
+%the transition matrix %assumes a linear dt
+%might just have to do the jacobian regularly?
+
 check=1/dt;
 odt=dt;
 prevT=0;
+count=0;
+prediction=0;
 %% Main operation
+height=size(x_,1);
 while 1
      if (t<1)%only want to predict one ahead for now
          
@@ -45,9 +48,16 @@ while 1
         end
         t=t+dt;
         tic;
+        %%DIAGNOSTIC PURPOSES
+        %----------------------------------
+        f=@()predict;
+        predictTime=timeit(f)
+        %------------------------------------
         predict;
+        height=height+1;
+        x_(height,:)=prediction;
         prevT=toc;%save how long it took
-         
+         count=count+1
          %dt=odt;
         
        
@@ -61,12 +71,18 @@ while 1
             if (tag==0)%checking for done flag
                break;
              elseif (tag==1)
+               
                 z=data(1:end-1);
-                correct;
+                
+         
+                
+               g=@()correct;
+                correctTime=gputimeit(g)
             end
        
         end
      end
+     
 end 
 
 % labSendReceive(2,2,"Done",1);
@@ -84,21 +100,25 @@ end
 %
 %-----------------------------------
 function predict
+    
     %disp("Prediction Phase")
-    height=size(x_,1);
     
-   x_(height+1,:)=[fstate(x_(height,1:end-1),dt); x_(height,end)+dt]';%time mustn't be included in the prediction 
+    previous=x_(height,1:end-1);
+   
+    prediction=[fstate(previous,dt); x_(height,end)+dt]';%gpu computations are faster when done like this
+   
+    xN=prediction(1:end-1)-previous;%find better notation
+    xD = mat2cell(xN,1,ones(1,numel(xN)));
+    A1=A(xD{:});
+   % A1=subs(A,x,xN);%ignore the time
     
-    xN=x_(height+1,:)-x_(height,:);%find better notation
-    
-    A1=subs(A,x,xN(1:end-1));%ignore the time
-    A1=single(vpa(A1));
+    %A1=single(vpa(A1))
     
     
     P_=A1*P*A1.';
     %% Mazzoni section
      
-    mazzoni;
+    %mazzoni;
     %eps is the minimum possible step that can be performed in matlab due to
     %floating point difference
     
@@ -111,7 +131,7 @@ function mazzoni()
     E=dt^2/2*((nowA-prevA)/(3*dt)-prevA.^2/6);%*f(u);%what is f???
     E=single(vpa(E));
     
-    C = bsxfun(@rdivide, E, x_(height+1,1:end-1));%%will use gpu for computing
+    C = bsxfun(@rdivide, E, prediction(1:end-1));%%will use gpu for computing
    
     EMax=max(abs(C(:)));%%returns the maximum element in the E matrix
 %     if (prevT~=0 && t~=1)%MY STUFF FOR REAL-TIME
@@ -137,18 +157,22 @@ function correct
     %H is typically found by taking the jacobian of the measurement
     %equation at point x
     %compute the kalman gain;
+    PHt=P_*H';
+    %%Normal Kalman calc
+   % K=PHt*inv(H*PHt+R);
     
-   % K=P_*H'*inv(H*P_*H'+R);
-   L=chol(H*P_*H'+R);
-   height=size(x_,1);
+    R=H*PHt+R;
+   L=chol(R);
+   U=L\eye(1);%need to check if eye(1) is fine at some point
+   R1=L'\U;
+   K=PHt*R1;
    
-   %K=P_*H'*inv(H*P_*H'+R);
    
-  U=L\eye(1);%need to check if eye(1) is fine at some point
-   A1=L'\U;
-  K=P_*H'*A1;
+
+  
     %update estimate with measurement
-    x_(height,1:end-1)=x_(height,1:end-1)+K'.*((z-x_(height,1:end-1)));%musn't update the timestamp
+    currentEstimate=x_(height,1:end-1);
+    x_(height,1:end-1)=currentEstimate+K'.*((z-currentEstimate));%musn't update the timestamp
    % x_(height,:)=x_(height,:)+(K'.*(z-x_(height,:)));%x being the current estimate
     
     %Update the error covariance

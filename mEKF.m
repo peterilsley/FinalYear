@@ -5,9 +5,9 @@
 %----------------------------------------
 
 %% Variables
-numState=3;
-N=10;%number of measurements
-stdM=0.4;%the deviation of the measurement
+numState=100;
+N=3;%number of measurements
+stdM=0.01;%the deviation of the measurement
 stdP=0;%currently not being used in simulation
 %not going to worry about passing Q or R for now
 
@@ -18,19 +18,18 @@ e=1;%tolerance level
 %% Creating the EKF param
 
 
-
-f=@(x)[x(1)+x(3)*cos(x(2)*pi/180);x(2)+5;x(3);];%for simulations, doesn't use dt
+f=@(x)[x(1)+x(3)*cos(x(2)*pi/180);x(2)+5;x(3)];%for simulations, doesn't use dt
 
 %% Prepping measurements and true values ahead of time
-X=simulateEvent(f,numState,N);%simulating true values
-X(:,1:3)
+X=simulateEvent(@func,numState,N);%simulating true values
+
 Z=getMeasurements(X,stdM,numState);
 %disp(Z(:,1:3));
 
 f=@(x,dt)[x(1)+dt*x(3)*cos(x(2)*pi/180);x(2)+5*dt;x(3)];%used for predictions %final x is the time
 dt=single(1);
-s=single([0.1 45 1.667 X(1,end)]);%initial state ESTIMATE %putting the timestamp on
-
+%s=single([0.1 45 1.667  X(1,end)]);%initial state ESTIMATE %putting the timestamp on
+s=Z(1,:);
 %-----------------------------------------------------
 %PLOTTING THE SIMULATION VERSUS THE INITIAL READINGS
 %plot(Z(:,1))
@@ -42,15 +41,19 @@ s=single([0.1 45 1.667 X(1,end)]);%initial state ESTIMATE %putting the timestamp
 
 
 %% parallel set up
-Z=gpuArray(Z);%sending to gpu after having been created
+%Z=gpuArray(Z);%sending to gpu after having been created
 
-x=gpuArray(s);
+init=s%gpuArray(s);
+syms x [1 numState] 
+a=func(x,dt);
+A=jacobian(a,x);
+A=matlabFunction(A);
 %% Live simulation (OLD)
 tic;
 spmd 
     switch labindex
         case 1 %EKF WORKER
-             sV=ekfTwo(f,x,numState,stdM,dt);%set up should only require the initial state estimate and not any measurements
+             sV=ekfTwo(@func,init,numState,stdM,dt,A,x);%set up should only require the initial state estimate and not any measurements
              
         case 2 %MEASUREMENT READINGS
             
@@ -73,13 +76,13 @@ toc
 %plotly_path = fullfile(pwd, 'plotly');
 %addpath(genpath(plotly_path));
 %plotlysetup('dylanIlsley', 'y4dVRQrV5gJwwh3IDItN');
-figure();
+%figure();
 sV=sV{1};%gets what sV is in worker 1
 numVar=1;
 lineWidth=8;
 
 subplot(3,1,1);
-plot(sV(:,end),sV(:,numVar),'-o')
+plot(sV(1:end-1,end),sV(1:end-1,numVar),'-o')
 hold on;
 plot(X(:,numVar))
 plot(Z(:,numVar))
@@ -88,7 +91,7 @@ ylabel('Distance (m)');
 hold off;
 
 subplot(3,1,2);
-plot(sV(:,end),sV(:,numVar+1),'-o')
+plot(sV(1:end-1,end),sV(1:end-1,numVar+1),'-o')
 hold on;
 plot(X(:,numVar+1))
 plot(Z(:,numVar+1))
@@ -97,7 +100,7 @@ ylabel('Velocity (m/s)');
 hold off;
 
 subplot(3,1,3);
-plot(sV(:,end),sV(:,numVar+1),'-o')
+plot(sV(1:end-1,end),sV(1:end-1,numVar+1),'-o')
 hold on;
 plot(X(:,numVar+1))
 plot(Z(:,numVar+1))
@@ -106,10 +109,10 @@ ylabel('Angle (Theta)');
 hold off;
 
 
-plotly(gather(sV(:,end)),gather(sV(:,numVar+1)));
-fig=fig2plotly(gcf);
+%plotly(gather(sV(:,end)),gather(sV(:,numVar+1)));
+%fig=fig2plotly(gcf);
 
-saveplotlyfig(fig, 'EKF_Example.png')
+%saveplotlyfig(fig, 'EKF_Example.png')
 %% Live simulation (NEW)
 % 
 % p=gcp();
@@ -121,12 +124,13 @@ saveplotlyfig(fig, 'EKF_Example.png')
 %function to simulate the true values
 function X = simulateEvent(f,numState,N)
 
-X=single(zeros(N, numState+1));%always 6 from the time
+X=zeros(N, numState+1,'single','gpuArray');%always 6 from the time
 dtTime=1;
 time=datenum(dtTime);
 
 %want in a double format
-X(1,:)=[[0.1 45 1.667],time]; %initial state of the bug
+X(1,:)=([rand(1,numState),time]);
+%X(1,:)=[[0.1 45 1.667 ],time]; %initial state of the bug
 
 
  for t=2:N %simulating one minute of travel
@@ -149,10 +153,18 @@ end %function
 %function to create the observed measurements including the uncertainty of
 %the measurement
 function Z = getMeasurements(X,std,numState)%
-    Z=zeros(size(X,1), numState+1);
-    Z=[X(:,1:3)+std.*randn(size(X,1),3), X(:,4:end)];%need to fix this since right now it isn't truly random
+    Z=zeros(size(X,1), numState+1,'single','gpuArray');
+    Z=[X(:,1:numState)+std.*randn(size(X,1),numState), X(:,numState+1:end)];%need to fix this since right now it isn't truly random
 end
 
+function data = func(x, dt)
+        if nargin<2
+         dt = 1;
+        end
+        r=1;
+        data=r.*x.*(1-x);
+        data=data.';
+end
 
 
 %% Live measurement function
