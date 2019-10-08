@@ -20,7 +20,7 @@ R=stdM^2;
 %H=gpuArray([1 0 0 ]);%no unit transformation
 H=ones(1,N,'single','gpuArray');
 %% Mazzoni
-e=0.04;
+e=0.03;
  B=0.8;
  prevA=zeros(N);%,'gpuArray');%create these on the GPU
  nowA=zeros(N);%,'gpuArray');
@@ -37,8 +37,17 @@ odt=dt;
 prevT=0;
 count=0;
 prediction=0;
+
+%% CPU conversion
+
+% I=gather(I);
+% P_= gather(P_); 
+% P=gather(P);
+% H=gather(H);
+
 %% Main operation
 height=size(x_,1);
+startInterval=tic;
 while 1
      if (t<1)%only want to predict one ahead for now
          
@@ -47,24 +56,25 @@ while 1
          dt=1-t  ;
         end
         t=t+dt;
-        tic;
+        startPred=tic;
         %%DIAGNOSTIC PURPOSES
         %----------------------------------
-        f=@()predict;
-        predictTime=timeit(f)
+        %f=@()predict;
+       % predictTime=gputimeit(f)
         %------------------------------------
         predict;
         height=height+1;
         x_(height,:)=prediction;
-        prevT=toc;%save how long it took
-         count=count+1
-         %dt=odt;
+        prevT=toc(startPred);%save how long it took to predict
+         count=count+1;
+         
         
-       
+       %dt=odt;
         
      else 
         [dataAvail,srcWkrIdx,tag] = labProbe;
         if (dataAvail==1)%checking if new measurement has been sent
+            len=toc(startInterval)
             [data,srcWkrIdx,tag] = labReceive;
         
             t=0;
@@ -75,9 +85,10 @@ while 1
                 z=data(1:end-1);
                 
          
-                
-               g=@()correct;
-                correctTime=gputimeit(g)
+                correct;
+                startInterval=tic;
+               %g=@()correct;
+                %correctTime=gputimeit(g)
             end
        
         end
@@ -114,11 +125,11 @@ function predict
     
     %A1=single(vpa(A1))
     
-    
     P_=A1*P*A1.';
+    
     %% Mazzoni section
      
-    %mazzoni;
+   mazzoni;
     %eps is the minimum possible step that can be performed in matlab due to
     %floating point difference
     
@@ -129,20 +140,20 @@ function mazzoni()
     %nowA=subs(A,x,x_(height+1,:));%need to tie dt into the jacobian
      
     E=dt^2/2*((nowA-prevA)/(3*dt)-prevA.^2/6);%*f(u);%what is f???
-    E=single(vpa(E));
+    %E=single(vpa(E));
     
     C = bsxfun(@rdivide, E, prediction(1:end-1));%%will use gpu for computing
    
     EMax=max(abs(C(:)));%%returns the maximum element in the E matrix
-%     if (prevT~=0 && t~=1)%MY STUFF FOR REAL-TIME
-%         timeMes=1;
-%         CalcTime=t+((timeMes-t)/prevT-1)*dt;
-%         alpha=timeMes/CalcTime;
-%         e=alpha^2*e;
-%     end
+    if (prevT~=0 && t~=1)%MY STUFF FOR REAL-TIME
+        timeMes=1;
+       CalcTime=toc(startInterval)+((timeMes-toc(startInterval))/prevT-1)*dt;
+        alpha=timeMes/CalcTime;
+        e=alpha^2*e;
+     end
     
     Qcoeff=B*sqrt(e./EMax);
-    dt=gather(dt*Qcoeff)%why???????
+    dt=dt*Qcoeff;%why???????
     
     
    %classUnderlying(dt)
@@ -159,13 +170,13 @@ function correct
     %compute the kalman gain;
     PHt=P_*H';
     %%Normal Kalman calc
-   % K=PHt*inv(H*PHt+R);
+    K=PHt*inv(H*PHt+R);
     
     R=H*PHt+R;
-   L=chol(R);
-   U=L\eye(1);%need to check if eye(1) is fine at some point
-   R1=L'\U;
-   K=PHt*R1;
+   %L=chol(R);
+   %U=L\eye(1);%need to check if eye(1) is fine at some point
+   %R1=L'\U;
+   %K=PHt*R1;
    
    
 
@@ -178,7 +189,7 @@ function correct
     %Update the error covariance
  
     P =(I-K*H)*P_;
-   
+ 
     
 end
 

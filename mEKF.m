@@ -5,9 +5,9 @@
 %----------------------------------------
 
 %% Variables
-numState=100;
-N=3;%number of measurements
-stdM=0.01;%the deviation of the measurement
+numState=5;
+N=6;%number of measurements
+stdM=0.02;%the deviation of the measurement
 stdP=0;%currently not being used in simulation
 %not going to worry about passing Q or R for now
 
@@ -27,7 +27,7 @@ Z=getMeasurements(X,stdM,numState);
 %disp(Z(:,1:3));
 
 f=@(x,dt)[x(1)+dt*x(3)*cos(x(2)*pi/180);x(2)+5*dt;x(3)];%used for predictions %final x is the time
-dt=single(1);
+dt=single(0.3);
 %s=single([0.1 45 1.667  X(1,end)]);%initial state ESTIMATE %putting the timestamp on
 s=Z(1,:);
 %-----------------------------------------------------
@@ -43,11 +43,17 @@ s=Z(1,:);
 %% parallel set up
 %Z=gpuArray(Z);%sending to gpu after having been created
 
-init=s%gpuArray(s);
+init=s%;gpuArray(s);
 syms x [1 numState] 
 a=func(x,dt);
 A=jacobian(a,x);
 A=matlabFunction(A);
+
+%  X=gather(X);
+%  Z=gather(Z);
+%  init=gather(init);%converting back to cpu
+
+
 %% Live simulation (OLD)
 tic;
 spmd 
@@ -77,6 +83,7 @@ toc
 %addpath(genpath(plotly_path));
 %plotlysetup('dylanIlsley', 'y4dVRQrV5gJwwh3IDItN');
 %figure();
+return;
 sV=sV{1};%gets what sV is in worker 1
 numVar=1;
 lineWidth=8;
@@ -129,7 +136,7 @@ dtTime=1;
 time=datenum(dtTime);
 
 %want in a double format
-X(1,:)=([rand(1,numState),time]);
+X(1,:)=([zeros(1,numState)+0.5,time]);
 %X(1,:)=[[0.1 45 1.667 ],time]; %initial state of the bug
 
 
