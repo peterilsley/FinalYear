@@ -5,12 +5,12 @@
 %----------------------------------------
 
 %% Variables
-numState=5;
-N=6;%number of measurements
-stdM=0.02;%the deviation of the measurement
+numState=3;
+N=50;%number of measurements
+stdM=0.01;%the deviation of the measurement
 stdP=0;%currently not being used in simulation
 %not going to worry about passing Q or R for now
-
+filename=[num2str(N),'_1S.xlsx']
 %% Mazzoni
 e=1;%tolerance level
 
@@ -18,16 +18,19 @@ e=1;%tolerance level
 %% Creating the EKF param
 
 
-f=@(x)[x(1)+x(3)*cos(x(2)*pi/180);x(2)+5;x(3)];%for simulations, doesn't use dt
+f=@(x)[x(1)+x(3)*cos(x(2)*pi/180);x(2)+1.5;x(3)+2;];%TEST CASE 1
+%f=@(x)[x(1)+1.5;x(2)+1.5;x(3)+2;];%Mazzo test
 
 %% Prepping measurements and true values ahead of time
-X=simulateEvent(@func,numState,N);%simulating true values
+X=simulateEvent(f,numState,N);%simulating true values
 
 Z=getMeasurements(X,stdM,numState);
 %disp(Z(:,1:3));
 
-f=@(x,dt)[x(1)+dt*x(3)*cos(x(2)*pi/180);x(2)+5*dt;x(3)];%used for predictions %final x is the time
-dt=single(0.3);
+f=@(x,dt)[x(1)+dt*x(3)*cos(x(2)*pi/180);x(2)+1.5*dt;x(3)+2*dt;];%used for predictions %final x is the time
+%f=@(x,dt)[x(1)+dt*1.5;x(2)+1.5*dt;x(3)+2*dt;]; %FOR
+%MAZZO
+dt=single(1);
 %s=single([0.1 45 1.667  X(1,end)]);%initial state ESTIMATE %putting the timestamp on
 s=Z(1,:);
 %-----------------------------------------------------
@@ -43,9 +46,9 @@ s=Z(1,:);
 %% parallel set up
 %Z=gpuArray(Z);%sending to gpu after having been created
 
-init=s%;gpuArray(s);
+init=s;%;gpuArray(s);
 syms x [1 numState] 
-a=func(x,dt);
+a=f(x,dt);
 A=jacobian(a,x);
 A=matlabFunction(A);
 
@@ -53,18 +56,17 @@ A=matlabFunction(A);
 %  Z=gather(Z);
 %  init=gather(init);%converting back to cpu
 
-
-%% Live simulation (OLD)
+%% Live simulation 
 tic;
 spmd 
     switch labindex
         case 1 %EKF WORKER
-             sV=ekfTwo(@func,init,numState,stdM,dt,A,x);%set up should only require the initial state estimate and not any measurements
+             sV=ekfTwo(f,init,numState,stdM,dt,A,x);%set up should only require the initial state estimate and not any measurements
              
         case 2 %MEASUREMENT READINGS
             
             for i=2:N
-                %pause(0.1);
+                %pause(0.001);
                 labSend(Z(i,:),1,1)%lab send is sending just one?
                 
             end
@@ -78,23 +80,24 @@ spmd
     
 end
 toc
-
+%% Plotting of figure
 %plotly_path = fullfile(pwd, 'plotly');
 %addpath(genpath(plotly_path));
 %plotlysetup('dylanIlsley', 'y4dVRQrV5gJwwh3IDItN');
 %figure();
-return;
+
 sV=sV{1};%gets what sV is in worker 1
 numVar=1;
 lineWidth=8;
-
+return;
+figure()
 subplot(3,1,1);
 plot(sV(1:end-1,end),sV(1:end-1,numVar),'-o')
 hold on;
 plot(X(:,numVar))
 plot(Z(:,numVar))
-xlabel('time (s)');
-ylabel('Distance (m)');
+xlabel('time (years)');
+ylabel('Population 1');
 hold off;
 
 subplot(3,1,2);
@@ -102,19 +105,32 @@ plot(sV(1:end-1,end),sV(1:end-1,numVar+1),'-o')
 hold on;
 plot(X(:,numVar+1))
 plot(Z(:,numVar+1))
-xlabel('time (s)');
-ylabel('Velocity (m/s)');
+xlabel('time (years)');
+ylabel('Population 2');
 hold off;
 
 subplot(3,1,3);
-plot(sV(1:end-1,end),sV(1:end-1,numVar+1),'-o')
+plot(sV(1:end-1,end),sV(1:end-1,numVar+2),'-o')
 hold on;
-plot(X(:,numVar+1))
-plot(Z(:,numVar+1))
-xlabel('time (s)');
-ylabel('Angle (Theta)');
+plot(X(:,numVar+2))
+plot(Z(:,numVar+2))
+xlabel('time (years)');
+ylabel('Population 3');
 hold off;
 
+
+%% Writing to Excel tables
+sV=gather(sV);
+X=gather(X);
+Z=gather(Z);
+
+saveas(gcf,'epsFig.eps','epsc') 
+
+writematrix(sV,filename,'Sheet',1);
+writematrix(X,filename,'Sheet',2);
+writematrix(Z,filename,'Sheet',3);
+
+%% Writing to plotly
 
 %plotly(gather(sV(:,end)),gather(sV(:,numVar+1)));
 %fig=fig2plotly(gcf);
@@ -136,7 +152,7 @@ dtTime=1;
 time=datenum(dtTime);
 
 %want in a double format
-X(1,:)=([zeros(1,numState)+0.5,time]);
+X(1,:)=([rand(1,numState),time]);
 %X(1,:)=[[0.1 45 1.667 ],time]; %initial state of the bug
 
 
@@ -168,13 +184,17 @@ function data = func(x, dt)
         if nargin<2
          dt = 1;
         end
-        r=1;
+        r=0.5;
         data=r.*x.*(1-x);
         data=data.';
 end
 
 
-%% Live measurement function
+%% WTEC
+
+
+
+
 
 
 
